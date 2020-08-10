@@ -1,5 +1,5 @@
 .DS_Store
 .idea/
-book/
+demo/
 *tmp.go
 TODO

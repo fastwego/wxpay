@@ -1,4 +1,4 @@
-// Copyright 2014 chanxuehong(chanxuehong@gmail.com)
+// Copyright 2020 FastWeGo
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,174 +15,82 @@
 package util
 
 import (
+	"bytes"
 	"crypto/aes"
-	"crypto/cipher"
-	"encoding/base64"
+	"errors"
 	"fmt"
 )
 
-// 把整数 n 格式化成 4 字节的网络字节序
-func encodeNetworkByteOrder(b []byte, n uint32) {
-	b[0] = byte(n >> 24)
-	b[1] = byte(n >> 16)
-	b[2] = byte(n >> 8)
-	b[3] = byte(n)
-}
+/*
+AES encryption with ECB and PKCS7 padding
 
-// 从 4 字节的网络字节序里解析出整数
-func decodeNetworkByteOrder(b []byte) (n uint32) {
-	return uint32(b[0])<<24 |
-		uint32(b[1])<<16 |
-		uint32(b[2])<<8 |
-		uint32(b[3])
-}
+AES算法有AES-128、AES-192、AES-256三种，分别对应的key是 16、24、32字节长度
 
-// AESEncryptMsg 消息加密
-// ciphertext = AES_Encrypt[random(16B) + msg_len(4B) + rawXMLMsg + appId]
-func AESEncryptMsg(random, rawXMLMsg []byte, appId string, encodingAESKey string) (ciphertext string) {
-	aesKey, _ := base64.StdEncoding.DecodeString(encodingAESKey + "=")
-	const (
-		BLOCK_SIZE = 32             // PKCS#7
-		BLOCK_MASK = BLOCK_SIZE - 1 // BLOCK_SIZE 为 2^n 时, 可以用 mask 获取针对 BLOCK_SIZE 的余数
-	)
-
-	appIdOffset := 20 + len(rawXMLMsg)
-	contentLen := appIdOffset + len(appId)
-	amountToPad := BLOCK_SIZE - contentLen&BLOCK_MASK
-	plaintextLen := contentLen + amountToPad
-
-	plaintext := make([]byte, plaintextLen)
-
-	// 拼接
-	copy(plaintext[:16], random)
-	encodeNetworkByteOrder(plaintext[16:20], uint32(len(rawXMLMsg)))
-	copy(plaintext[20:], rawXMLMsg)
-	copy(plaintext[appIdOffset:], appId)
-
-	// PKCS#7 补位
-	for i := contentLen; i < plaintextLen; i++ {
-		plaintext[i] = byte(amountToPad)
-	}
-
-	// 加密
-	block, err := aes.NewCipher(aesKey)
+对应的加密解密区块长度BlockSize也是16、24、32字节长度
+*/
+func AESECBPKCS7Encrypt(pt, key []byte) (encrypted []byte, err error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		panic(err)
+		panic(err.Error())
 	}
-	mode := cipher.NewCBCEncrypter(block, aesKey[:16])
-	mode.CryptBlocks(plaintext, plaintext)
+	mode := NewECBEncrypter(block)
 
-	return base64.StdEncoding.EncodeToString(plaintext)
-}
+	bufLen := len(pt)
+	padLen := mode.BlockSize() - (bufLen % mode.BlockSize())
+	padText := bytes.Repeat([]byte{byte(padLen)}, padLen)
+	pt = append(pt, padText...)
+	ct := make([]byte, len(pt))
+	mode.CryptBlocks(ct, pt)
 
-// AESDecryptMsg 消息解密
-// ciphertext = AES_Encrypt[random(16B) + msg_len(4B) + rawXMLMsg + appId]
-func AESDecryptMsg(base64CipherText string, encodingAESKey string) (random, rawXMLMsg, appId []byte, err error) {
-	ciphertext, err := base64.StdEncoding.DecodeString(base64CipherText)
-	if err != nil {
-		return
-	}
-
-	aesKey, err := base64.StdEncoding.DecodeString(encodingAESKey + "=")
-	if err != nil {
-		return
-	}
-
-	const (
-		BLOCK_SIZE = 32             // PKCS#7
-		BLOCK_MASK = BLOCK_SIZE - 1 // BLOCK_SIZE 为 2^n 时, 可以用 mask 获取针对 BLOCK_SIZE 的余数
-	)
-
-	if len(ciphertext) < BLOCK_SIZE {
-		err = fmt.Errorf("the length of ciphertext too short: %d", len(ciphertext))
-		return
-	}
-	if len(ciphertext)&BLOCK_MASK != 0 {
-		err = fmt.Errorf("ciphertext is not a multiple of the block size, the length is %d", len(ciphertext))
-		return
-	}
-
-	plaintext := make([]byte, len(ciphertext)) // len(plaintext) >= BLOCK_SIZE
-
-	// 解密
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return
-	}
-	mode := cipher.NewCBCDecrypter(block, aesKey[:16])
-	mode.CryptBlocks(plaintext, ciphertext)
-
-	// PKCS#7 去除补位
-	amountToPad := int(plaintext[len(plaintext)-1])
-	if amountToPad < 1 || amountToPad > BLOCK_SIZE {
-		err = fmt.Errorf("the amount to pad is incorrect: %d", amountToPad)
-		return
-	}
-	plaintext = plaintext[:len(plaintext)-amountToPad]
-
-	// 反拼接
-	// len(plaintext) == 16+4+len(rawXMLMsg)+len(appId)
-	if len(plaintext) <= 20 {
-		err = fmt.Errorf("plaintext too short, the length is %d", len(plaintext))
-		return
-	}
-	rawXMLMsgLen := int(decodeNetworkByteOrder(plaintext[16:20]))
-	if rawXMLMsgLen < 0 {
-		err = fmt.Errorf("incorrect msg length: %d", rawXMLMsgLen)
-		return
-	}
-	appIdOffset := 20 + rawXMLMsgLen
-	if len(plaintext) <= appIdOffset {
-		err = fmt.Errorf("msg length too large: %d", rawXMLMsgLen)
-		return
-	}
-
-	random = plaintext[:16:20]
-	rawXMLMsg = plaintext[20:appIdOffset:appIdOffset]
-	appId = plaintext[appIdOffset:]
+	encrypted = pt
 	return
 }
 
-// AESDecryptData 数据解密
-func AESDecryptData(cipherText []byte, aesKey []byte, iv []byte) (rawData []byte, err error) {
+/*
+   AES decryption with ECB and PKCS7 padding
 
-	const (
-		BLOCK_SIZE = 32             // PKCS#7
-		BLOCK_MASK = BLOCK_SIZE - 1 // BLOCK_SIZE 为 2^n 时, 可以用 mask 获取针对 BLOCK_SIZE 的余数
-	)
+   AES算法有AES-128、AES-192、AES-256三种，分别对应的key是 16、24、32字节长度
 
-	if len(cipherText) < BLOCK_SIZE {
-		err = fmt.Errorf("the length of ciphertext too short: %d", len(cipherText))
-		return
-	}
+   对应的加密解密区块长度BlockSize也是16、24、32字节长度
+*/
+func AESECBPKCS7Decrypt(cipherData, key []byte) (decrypted []byte, err error) {
 
-	plaintext := make([]byte, len(cipherText)) // len(plaintext) >= BLOCK_SIZE
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.New(fmt.Sprint(r))
+			return
+		}
+	}()
 
-	// 解密
-	block, err := aes.NewCipher(aesKey)
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		panic(err)
+		panic(err.Error())
 	}
-	mode := cipher.NewCBCDecrypter(block, iv)
-	mode.CryptBlocks(plaintext, cipherText)
+	mode := NewECBDecrypter(block)
+	pt := make([]byte, len(cipherData))
+	mode.CryptBlocks(pt, cipherData)
 
-	// PKCS#7 去除补位
-	amountToPad := int(plaintext[len(plaintext)-1])
-	if amountToPad < 1 || amountToPad > BLOCK_SIZE {
-		err = fmt.Errorf("the amount to pad is incorrect: %d", amountToPad)
-		return
-	}
-	plaintext = plaintext[:len(plaintext)-amountToPad]
-
-	// 反拼接
-	// len(plaintext) == 16+4+len(rawXMLMsg)+len(appId)
-	if len(plaintext) <= 20 {
-		err = fmt.Errorf("plaintext too short, the length is %d", len(plaintext))
+	bufLen := len(pt)
+	if bufLen == 0 {
+		err = errors.New("invalid padding size")
 		return
 	}
 
-	rawData = plaintext
+	pad := pt[bufLen-1]
+	padLen := int(pad)
+	if padLen > bufLen || padLen > mode.BlockSize() {
+		err = errors.New("invalid padding size")
+		return
+	}
+
+	for _, v := range pt[bufLen-padLen : bufLen-1] {
+		if v != pad {
+			err = errors.New("invalid padding")
+			return
+		}
+	}
+
+	decrypted = pt[:bufLen-padLen]
 
 	return
-
 }

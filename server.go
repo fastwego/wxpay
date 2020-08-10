@@ -15,11 +15,12 @@
 package wxpay
 
 import (
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 
 	"github.com/fastwego/wxpay/util"
 )
@@ -31,58 +32,12 @@ type Server struct {
 	Ctx *WXPay
 }
 
-type OrderParams struct {
-	ReturnCode         string `xml:"return_code"`
-	ReturnMsg          string `xml:"return_msg"`
-	Appid              string `xml:"appid" json:"appid"`
-	Mchid              string `xml:"mch_id"`
-	DeviceInfo         string `xml:"device_info"`
-	NonceStr           string `xml:"nonce_str"`
-	Sign               string `xml:"sign"`
-	SignType           string `xml:"sign_type"`
-	ResultCode         string `xml:"result_code"`
-	ErrCode            string `xml:"err_code"`
-	ErrCodeDes         string `xml:"err_code_des"`
-	Openid             string `xml:"openid"`
-	IsSubscribe        string `xml:"is_subscribe"`
-	TradeType          string `xml:"trade_type"`
-	BankType           string `xml:"bank_type"`
-	TotalFee           int    `xml:"total_fee"`
-	SettlementTotalFee int    `xml:"settlement_total_fee"`
-	FeeType            string `xml:"fee_type"`
-	CashFee            string `xml:"cash_fee"`
-	CashFeeType        string `xml:"cash_fee_type"`
+/*
+支付结果 回调
 
-	CouponFee   int `xml:"coupon_fee"`
-	CouponCount int `xml:"coupon_count"`
-
-	CouponType0 string `xml:"coupon_type_0"`
-	CouponID0   string `xml:"coupon_id_0"`
-	CouponFee0  string `xml:"coupon_fee_0"`
-
-	CouponType1 string `xml:"coupon_type_1"`
-	CouponID1   string `xml:"coupon_id_1"`
-	CouponFee1  string `xml:"coupon_fee_1"`
-
-	CouponType2 string `xml:"coupon_type_2"`
-	CouponID2   string `xml:"coupon_id_2"`
-	CouponFee2  string `xml:"coupon_fee_2"`
-
-	CouponType3 string `xml:"coupon_type_3"`
-	CouponID3   string `xml:"coupon_id_3"`
-	CouponFee3  string `xml:"coupon_fee_3"`
-
-	CouponType4 string `xml:"coupon_type_4"`
-	CouponID4   string `xml:"coupon_id_4"`
-	CouponFee4  string `xml:"coupon_fee_4"`
-
-	TransactionID string `xml:"transaction_id"`
-	OutTradeNo    string `xml:"out_trade_no"`
-	Attach        string `xml:"attach"`
-	TimeEnd       string `xml:"time_end"`
-}
-
-func (s *Server) ParseXML(request *http.Request) (params OrderParams, err error) {
+See: https://pay.weixin.qq.com/wiki/doc/api/app/app.php?chapter=9_7&index=3
+*/
+func (s *Server) PaymentNotify(request *http.Request) (params map[string]string, err error) {
 	var body []byte
 	body, err = ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -90,31 +45,22 @@ func (s *Server) ParseXML(request *http.Request) (params OrderParams, err error)
 	}
 
 	if s.Ctx.Logger != nil {
-		s.Ctx.Logger.Println(string(body))
+		s.Ctx.Logger.Println("PaymentNotify", string(body))
 	}
 
-	err = xml.Unmarshal(body, &params)
+	params, err = util.XML2Map(body)
 	if err != nil {
 		return
 	}
 
 	// 验证签名
-	kvs := url.Values{}
-	structToMap := util.StructToMap(params)
-	for k, v := range structToMap {
-		value, ok := v.(string)
-		if ok && len(value) > 0 && k != "sign" {
-			kvs.Add(k, value)
-		}
-	}
-
-	sign, err := s.Ctx.Sign(kvs, kvs.Get("sign_type"))
+	sign, err := s.Ctx.Sign(params, params["sign_type"])
 	if err != nil {
 		return
 	}
 
-	if params.Sign != sign {
-		err = fmt.Errorf(" params.Sign %s != sign %s", params.Sign, sign)
+	if params["sign"] != sign {
+		err = fmt.Errorf(" params.Sign %s != Sign %s", params["sign"], sign)
 		return
 	}
 
@@ -122,14 +68,72 @@ func (s *Server) ParseXML(request *http.Request) (params OrderParams, err error)
 }
 
 /*
-Response 响应微信消息
+退款结果 回调
+
+See: https://pay.weixin.qq.com/wiki/doc/api/app/app.php?chapter=9_16&index=11
+*/
+func (s *Server) RefundNotify(request *http.Request) (params map[string]string, err error) {
+	var body []byte
+	body, err = ioutil.ReadAll(request.Body)
+	if err != nil {
+		return
+	}
+
+	if s.Ctx.Logger != nil {
+		s.Ctx.Logger.Println("RefundNotify", string(body))
+	}
+
+	encryptMsg := struct {
+		XMLName  xml.Name `xml:"xml"`
+		Appid    string   `xml:"appid"`
+		Mchid    string   `xml:"mch_id"`
+		NonceStr string   `xml:"nonce_str"`
+		ReqInfo  string   `xml:"req_info"`
+	}{}
+
+	err = xml.Unmarshal(body, &encryptMsg)
+	if err != nil {
+		return
+	}
+
+	/*
+		解密步骤如下：
+
+		（1）对加密串A做 base64解码，得到加密串B
+
+		（2）对商户 key做 md5，得到32位小写 key* ( key设置路径：微信商户平台(pay.weixin.qq.com)-->账户设置-->API安全-->密钥设置 )
+
+		（3）用 key*对加密串B做AES-256-ECB解密（PKCS7Padding）`
+	*/
+	cipherText, err := base64.StdEncoding.DecodeString(encryptMsg.ReqInfo)
+	if err != nil {
+		return
+	}
+
+	key := []byte(fmt.Sprintf("%x", md5.Sum([]byte(s.Ctx.Config.ApiKey))))
+
+	reqInfo, err := util.AESECBPKCS7Decrypt(cipherText, key)
+	if err != nil {
+		return
+	}
+
+	params, err = util.XML2Map(reqInfo)
+	if err != nil {
+		return
+	}
+
+	return
+}
+
+/*
+ResponseSuccess 响应微信消息
 
 <xml>
 <return_code><![CDATA[SUCCESS]]></return_code>
 <return_msg><![CDATA[OK]]></return_msg>
 </xml>
 */
-func (s *Server) Response(writer http.ResponseWriter, request *http.Request) (err error) {
+func (s *Server) ResponseSuccess(writer http.ResponseWriter, request *http.Request) (err error) {
 
 	response := struct {
 		XMLName    xml.Name   `xml:"xml"`
@@ -148,7 +152,7 @@ func (s *Server) Response(writer http.ResponseWriter, request *http.Request) (er
 	_, err = writer.Write(output)
 
 	if s.Ctx.Logger != nil {
-		s.Ctx.Logger.Println("Response: ", string(output))
+		s.Ctx.Logger.Println("ResponseSuccess: ", string(output))
 	}
 
 	return
