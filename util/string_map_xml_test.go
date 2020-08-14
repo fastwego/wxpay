@@ -30,8 +30,7 @@ func TestStringMap_MarshalXML(t *testing.T) {
 	}{
 		{name: "case1", m: stringMap{
 			"key_1": "Value One",
-			"key_2": "Value Two",
-		}, want: []byte(`<stringMap><key_1>Value One</key_1><key_2>Value Two</key_2></stringMap>`)},
+		}, want: []byte(`<stringMap><key_1>Value One</key_1></stringMap>`)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
