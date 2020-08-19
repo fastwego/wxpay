@@ -2,6 +2,8 @@
 
 A fast [wxpay(v2)](https://pay.weixin.qq.com/wiki/doc/api/index.html) development sdk written in Golang
 
+[![GoDoc](https://pkg.go.dev/badge/github.com/fastwego/wxpay?status.svg)](https://pkg.go.dev/github.com/fastwego/wxpay?tab=doc)
+[![Go Report Card](https://goreportcard.com/badge/github.com/fastwego/wxpay)](https://goreportcard.com/report/github.com/fastwego/wxpay)
 ## 快速开始 & demo
 
 ```shell script

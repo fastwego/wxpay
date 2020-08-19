@@ -82,8 +82,7 @@ func TestMap2XML(t *testing.T) {
 	}{
 		{name: "case1", args: args{kvs: map[string]string{
 			"key_1": "Value One",
-			"key_2": "Value Two",
-		}}, wantText: []byte(`<xml><key_1>Value One</key_1><key_2>Value Two</key_2></xml>`)},
+		}}, wantText: []byte(`<xml><key_1>Value One</key_1></xml>`)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
