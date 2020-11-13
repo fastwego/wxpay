@@ -1,8 +1,8 @@
 module github.com/fastwego/wxpay
 
-go 1.14
+go 1.15
 
 require (
-	github.com/iancoleman/strcase v0.0.0-20191112232945-16388991a334
-	golang.org/x/crypto v0.0.0-20200317142112-1b76d66859c6
+	github.com/iancoleman/strcase v0.1.2
+	golang.org/x/crypto v0.0.0-20201112155050-0c6587e931a9
 )
